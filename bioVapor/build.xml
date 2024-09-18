@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+
+<project basedir="." default="list" name="omim-widget" xmlns:xdb="http://exist-db.org/ant">
+	<description>OMIM widget by jmfernandez Ant script $Id$</description>
+	
+	<!--
+		Configuration properties
+	-->
+	<dirname property="project.home" file="${ant.file}"/>
+	<property file="${project.home}/build.properties"/>
+	
+	<property name="src" location="src" />
+	<property name="build" location="build" />
+	<property name="libs" location="libs" />
+	
+	
+	<dirname property="project.home.parent" file="${project.home}"/>
+	
+	<property name="ensembl-exist-module.dir.rel" value="ensembl-exist-module" />
+	<property name="ensembl-exist-module.dir" location="${ensembl-exist-module.dir.rel}" />
+	<property name="ensembl-exist-module.dist.dir" location="${ensembl-exist-module.dir.rel}/dist" />
+	<property name="ensembl-exist-module.eXist.dir" location="${ensembl-exist-module.dir.rel}/eXist" />
+	
+	<property name="eXist.jar.rel" value="exist.jar"/>
+	<property name="eXist.jar" location="${ensembl-exist-module.eXist.dir}/${eXist.jar.rel}"/>
+
+	<path id="exist-ant.classpath.core">
+		<fileset dir="${ensembl-exist-module.eXist.dir}">
+			<include name="${eXist.jar.rel}" />
+			<include name="exist-optional.jar" />
+			<include name="lib/core/*.jar" />
+		</fileset>
+		<!--
+		<fileset dir="antlibs">
+			<include name="*.jar" />
+		</fileset>
+		-->
+	</path>
+	
+	<!--
+		Targets
+	-->
+	
+	<target name="init">
+		<!-- Creating the timestamp -->
+		<tstamp/>
+	</target>
+	
+	<target name="bootstrap.eXist.exists" depends="init">
+		<available file="${eXist.jar}" property="eXist.archive.present"/>
+	</target>
+	
+	<target name="conditional.bootstrap.eXist" depends="bootstrap.eXist.exists" unless="eXist.archive.present">
+		<antcall target="bootstrap.eXist"/>
+	</target>
+	
+	<target name="bootstrap.eXist" depends="compile.eXist" description="It compiles eXist">
+	</target>
+
+	<target name="init.eXist.extension" depends="conditional.bootstrap.eXist">
+		<!--
+			eXist Ant task
+		-->
+		<property name="myclasspath" refid="exist-ant.classpath.core"/>
+		<!-- Emit the property to the ant console -->
+		<echo message="Classpath = ${myclasspath}"/>
+
+		<typedef resource="org/exist/ant/antlib.xml" uri="http://exist-db.org/ant">
+			<classpath refid="exist-ant.classpath.core"/>
+		</typedef>
+
+	</target>
+	
+	<target name="list" depends="init.eXist.extension" description="Listing">
+		<xdb:list uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db" user="${deploy.eXist.user}" password="${deploy.eXist.pass}" failonerror="true" resources="true" outputproperty="resources"/>
+		<xdb:list uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db" user="${deploy.eXist.user}" password="${deploy.eXist.pass}" failonerror="true" collections="true" outputproperty="collections" />
+		<echo>Resources:${line.separator}${resources}${line.separator}and Collections:${line.separator}${collections}</echo>
+	</target>
+
+	<target name="deploy.skel" depends="init.eXist.extension" description="Upload the skeleton">
+		<!-- First, XML content -->
+		<xdb:store uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db" user="${deploy.eXist.user}" password="${deploy.eXist.pass}" failonerror="true" createsubcollections="true">
+			<fileset dir="skel">
+				<include name="**/*.xsd" />
+				<include name="**/*.xsl" />
+				<include name="**/*.xconf" />
+				<include name="**/*.xml" />
+			</fileset>
+		</xdb:store>
+		<!-- Then, non XML content -->
+		<xdb:store uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db" user="${deploy.eXist.user}" password="${deploy.eXist.pass}" failonerror="true" createsubcollections="true">
+			<fileset dir="skel" defaultexcludes="no">
+				<exclude name="**/*.xsd" />
+				<exclude name="**/*.xsl" />
+				<exclude name="**/*.xconf" />
+				<exclude name="**/*.xml" />
+				<exclude name="**/.svn" />
+				<exclude name="**/.svn/**" />
+			</fileset>
+		</xdb:store>
+	</target>
+
+	<target name="deploy.OMIM" depends="init.eXist.extension" description="Upload OMIM database">
+		<tempfile property="omim.temp.file" suffix=".xml" destdir="${java.io.tmpdir}"/>
+		<basename property="omim.temp.filename" file="${omim.temp.file}" />
+		<echo>Generating OMIM document ${omim.temp.filename} from the contents at ${omim.dir}</echo>
+		<exec executable="perl">
+			<arg value="${project.home.parent}/parsers/OMIM/OMIM2ODB.pl" />
+			<arg value="${omim.dir}" />
+			<arg value="${omim.temp.file}" />
+		</exec>
+		<!-- Then, XML content storage -->
+		<echo>Storing OMIM document ${omim.temp.filename} at ${deploy.host}:${deploy.eXist.port}</echo>
+		<xdb:store uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db/${omim.eXist.collection}"
+			user="${deploy.eXist.user}"
+			password="${deploy.eXist.pass}"
+			failonerror="true"
+			createcollection="true"
+			type="xml"
+			srcfile="${omim.temp.file}"
+		/>
+		<!-- Let's erase the generated local file -->
+		<delete file="${omim.temp.file}" />
+		<!-- Last, renaming -->
+		<echo>Renaming OMIM document ${omim.temp.filename} at ${deploy.host}:${deploy.eXist.port}</echo>
+		<xdb:xpath uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db"
+			user="${deploy.eXist.user}"
+			password="${deploy.eXist.pass}"
+			failonerror="true"
+			query="xmldb:rename('${omim.eXist.collection}','${omim.temp.filename}','omim.xml')"
+		/>
+		<!--
+		<xdb:move uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db/${omim.eXist.collection}"
+			user="${deploy.eXist.user}"
+			password="${deploy.eXist.pass}"
+			failonerror="true"
+			resource="${omim.temp.filename}"
+			name="omim.xml"
+		/>
+		-->
+	</target>
+
+	<target name="reindex.OMIM" depends="deploy.skel" description="Reindex OMIM database">
+		<echo>Reindexing OMIM database at ${deploy.host}:${deploy.eXist.port}</echo>
+		<xdb:xpath uri="xmldb:exist://${deploy.host}:${deploy.eXist.port}/xmlrpc/db"
+			user="${deploy.eXist.user}"
+			password="${deploy.eXist.pass}"
+			failonerror="true"
+			query="xmldb:reindex('${omim.eXist.collection}')"
+		/>
+	</target>
+
+	<target name="deploy.jars" depends="compile.ensembl-exist-module" description="It copies the eXist Ensembl library JAR files to the eXist installation">
+		<scp todir="${deploy.ssh.user}@${deploy.host}:${deploy.eXist.dir}/lib/user" keyfile="${deploy.ssh.keyfile}" passphrase="${deploy.ssh.passphrase}" verbose="true">
+			<fileset dir="${ensembl-exist-module.dist.dir}">
+				<include name="*.jar"/>
+			</fileset>
+		</scp>
+	</target>
+	
+	<target name="deploy" depends="deploy.jars,deploy.skel" description="Installation procedure">
+	</target>
+	
+	<target name="clean" depends="clean.ensembl-exist-module" description="clean up ${ant.project.name}">
+		<!-- Something, please! -->
+	</target>
+	
+	<target name="compile.ensembl-exist-module" depends="init" description="compiles ensembl-exist-module">
+		<ant inheritAll="false" inheritRefs="false" dir="${ensembl-exist-module.dir}" />
+	</target>
+	
+	<target name="compile.eXist" depends="init" description="compiles eXist inside ensemble-exist-module">
+		<ant inheritAll="false" inheritRefs="false" dir="${ensembl-exist-module.eXist.dir}" />
+	</target>
+	
+	<target name="clean.ensembl-exist-module" description="clean up ensembl-mim-java">
+		<ant inheritAll="false" inheritRefs="false" dir="${ensembl-exist-module.dir}" target="clean" />
+	</target>
+	
+</project>
